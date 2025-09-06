@@ -4,7 +4,8 @@ const cors = require('cors')
 const app = express()
 const port = process.env.PORT || 3000;
 require('dotenv').config()
-
+const OpenAI = require("openai").default;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.use(cors());
 app.use(express.json());
 
@@ -27,7 +28,226 @@ async function run() {
     const usersCollection = db.collection("users");
     const classesCollection = db.collection("class");
     const budgetCollection = db.collection("budgets");
+    const studyTasksCollection = db.collection("tasks");
+    const questionsCollection = db.collection("questions");
+    //===========================generate qustion==========
+     // ===== AI Chatbot =====
+     app.post("/ai-chat", async (req, res) => {
+      try {
+        const { message } = req.body;
+        if (!message) return res.status(400).send({ success: false, error: "Message is required" });
 
+        // Fetch current classes dynamically
+        const classes = await classesCollection.find().toArray();
+
+        // System prompt with website info
+        const systemPrompt = `
+          You are a helpful AI assistant for AcademiaX.
+          Website features:
+          - Users: register/login
+          - Classes: ${classes.map(c => c.name).join(", ")}
+          - Budget management
+          - Study planner
+          - AI question generator
+          Always answer questions about the website politely and helpfully.
+        `;
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: message }
+          ],
+          temperature: 0.6,
+          max_tokens: 300
+        });
+
+        const reply = response.choices[0].message.content;
+        res.send({ success: true, reply });
+
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ success: false, error: err.message });
+      }
+    });
+
+    app.post("/generate-questions", async (req, res) => {
+      try {
+        const { topic } = req.body;
+        if (!topic) return res.status(400).send({ success: false, error: "Topic required" });
+
+        const system = `You are an exam generator. Return STRICT JSON:
+        { "mcq":[{"question":string,"options":[string,string,string,string],"correct":string}],
+          "trueFalse":[{"question":string,"answer":boolean}],
+          "short":[{"question":string,"answer":string}]}`;
+
+        const user = `Generate 5 MCQs, 5 True/False, 5 Short Answer for Topic: "${topic}"`;
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{ role: "system", content: system }, { role: "user", content: user }],
+          temperature: 0.4,
+          max_tokens: 1200,
+          response_format: { type: "json_object" },
+        });
+
+        const data = JSON.parse(response.choices[0].message.content);
+        await questionsCollection.insertOne({ topic, questions: data, createdAt: new Date() });
+        res.send({ success: true, data });
+      } catch (err) {
+        res.status(500).send({ success: false, error: err.message || "Server error" });
+      }
+    });
+    //=========================studyTasks api=========================
+    // BACKEND API ROUTES - FIXED VERSION
+
+// GET route - Fixed to return consistent response structure
+app.get("/tasks", async (req, res) => {
+  try {
+    const { email } = req.query;
+    
+    if (!email) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "Email parameter is required" 
+      });
+    }
+    
+    const tasks = await studyTasksCollection.find({ email }).toArray();
+    
+    // FIXED: Return consistent response structure with success flag and data field
+    res.send({ 
+      success: true, 
+      data: tasks 
+    });
+  } catch (err) {
+    console.error("Error fetching tasks:", err);
+    res.status(500).send({ 
+      success: false, 
+      message: "Server error while fetching tasks",
+      error: err.message 
+    });
+  }
+});
+
+// POST route - Already correct
+app.post("/tasks", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "Email is required" 
+      });
+    }
+    
+    const task = { 
+      ...req.body, 
+      createdAt: new Date(), 
+      completed: false 
+    };
+    
+    const result = await studyTasksCollection.insertOne(task);
+    res.send({ 
+      success: true, 
+      data: { ...task, _id: result.insertedId } 
+    });
+  } catch (err) {
+    console.error("Error creating task:", err);
+    res.status(500).send({ 
+      success: false, 
+      message: "Server error", 
+      error: err.message 
+    });
+  }
+});
+
+// Additional routes you might need - PUT and DELETE should also follow same pattern
+
+app.put("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "Email is required" 
+      });
+    }
+    
+    const updateData = { ...req.body };
+    delete updateData.email; // Remove email from update data
+    
+    const result = await studyTasksCollection.updateOne(
+      { _id: new ObjectId(id), email: email }, 
+      { $set: updateData }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ 
+        success: false, 
+        message: "Task not found or unauthorized" 
+      });
+    }
+    
+    // Get the updated task to return
+    const updatedTask = await studyTasksCollection.findOne({ 
+      _id: new ObjectId(id), 
+      email: email 
+    });
+    
+    res.send({ 
+      success: true, 
+      data: updatedTask 
+    });
+  } catch (err) {
+    console.error("Error updating task:", err);
+    res.status(500).send({ 
+      success: false, 
+      message: "Server error", 
+      error: err.message 
+    });
+  }
+});
+
+app.delete("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.query;
+    
+    if (!email) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "Email is required" 
+      });
+    }
+    
+    const result = await studyTasksCollection.deleteOne({ 
+      _id: new ObjectId(id), 
+      email: email 
+    });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ 
+        success: false, 
+        message: "Task not found or unauthorized" 
+      });
+    }
+    
+    res.send({ 
+      success: true, 
+      message: "Task deleted successfully" 
+    });
+  } catch (err) {
+    console.error("Error deleting task:", err);
+    res.status(500).send({ 
+      success: false, 
+      message: "Server error", 
+      error: err.message 
+    });
+  }
+});
     //=========================users api=========================
     app.get("/users", async (req, res) => {
       try {
