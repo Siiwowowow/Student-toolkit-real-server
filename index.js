@@ -1,13 +1,38 @@
 const express = require('express')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cors = require('cors')
+
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const app = express()
 const port = process.env.PORT || 3000;
 require('dotenv').config()
 const OpenAI = require("openai").default;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-app.use(cors());
+app.use(cors({
+  origin:['http://localhost:5173','https://student-toolkit-17af6.web.app'],
+  credentials:true
+}));
 app.use(express.json());
+app.use(cookieParser())
+const logger=(req,res,next)=>{
+  console.log('inside the token middle ware')
+  next()
+}
+
+const verifyToken=(req,res,next)=>{ 
+  const token=req?.cookies?.token;
+  if(!token){
+    return res.status(401).send({success:false, message:"unauthorized access"})
+  }
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded)=>{
+    if(err){
+      return res.status(403).send({success:false, message:"forbidden access"})
+    }
+    req.decoded=decoded;
+    next()
+  })
+}
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ikrarq7.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -30,7 +55,21 @@ async function run() {
     const budgetCollection = db.collection("budgets");
     const studyTasksCollection = db.collection("tasks");
     const questionsCollection = db.collection("questions");
-    //===========================generate qustion==========
+    //===========================Jwt related api==========
+    app.post("/jwt", async(req, res) => {
+      const {email} = req.body;
+      const user={email}
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {expiresIn: '3000d'});
+      res.cookie('token',token,{
+          httpOnly:true,
+          secure: process.env.NODE_ENV === "production" ? true: false,
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        })
+      res.send({success:true, token});
+
+    });
+    //======get budget====
+    
      // ===== AI Chatbot =====
      app.post("/ai-chat", async (req, res) => {
       try {
@@ -98,18 +137,18 @@ async function run() {
         res.status(500).send({ success: false, error: err.message || "Server error" });
       }
     });
-    //=========================studyTasks api=========================
-    // BACKEND API ROUTES - FIXED VERSION
+    //=======================studyTasks api=========================
+    
 
 // GET route - Fixed to return consistent response structure
-app.get("/tasks", async (req, res) => {
+app.get("/tasks",logger,verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
     
-    if (!email) {
+    if (!email==req.decoded.email) {
       return res.status(400).send({ 
         success: false, 
-        message: "Email parameter is required" 
+        message: "Email is required and must match the token email"
       });
     }
     
@@ -161,8 +200,6 @@ app.post("/tasks", async (req, res) => {
     });
   }
 });
-
-// Additional routes you might need - PUT and DELETE should also follow same pattern
 
 app.put("/tasks/:id", async (req, res) => {
   try {
@@ -285,12 +322,19 @@ app.delete("/tasks/:id", async (req, res) => {
       }
     });
     //=========================class api=========================
-    app.get("/class", async (req, res) => {
+    app.get("/class",logger,verifyToken, async (req, res) => {
       const { email } = req.query;
       let query = {};
-      if (email) {
-        query.email = email;
+      if (!email==req.decoded.email) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "Email is required and must match the token email"
+      });   
       }
+      if (email) {
+        query.email = email; 
+      }
+      
 
       const classes = await classesCollection.find(query).toArray();
       res.send({ success: true, data: classes });
@@ -312,7 +356,7 @@ app.delete("/tasks/:id", async (req, res) => {
     
 
     //=========================budget api=========================
-    app.get("/budgets", async (req, res) => {
+    app.get("/budgets",verifyToken,logger, async (req, res) => {
       try {
         const { email } = req.query;
         let query = {};
@@ -321,6 +365,7 @@ app.delete("/tasks/:id", async (req, res) => {
         }
         const budget = await budgetCollection.find(query).toArray();
         res.send(budget);
+        
       } catch (err) {
         res.status(500).send({ success: false, message: "Server error", error: err.message });
       }
