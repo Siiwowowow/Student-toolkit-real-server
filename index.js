@@ -71,7 +71,7 @@ async function run() {
     });
 
     // Get all classes
-    app.get("/class",logger,verifyToken, async (req, res) => {
+    app.get("/class", async (req, res) => {
       const { email } = req.query;
       let query = {};
       if (!email==req.decoded.email) {
