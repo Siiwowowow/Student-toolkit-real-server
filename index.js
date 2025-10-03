@@ -3,12 +3,13 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
+const port = process.env.PORT || 3000;
 require('dotenv').config();
 const OpenAI = require("openai").default;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const app = express();
-const port = process.env.PORT || 3000;
+
 
 // ===== CORS =====
 const corsOptions = {
@@ -482,6 +483,9 @@ async function run() {
 }
 
 run().catch(console.dir);
+app.get('/', (req, res) => {
+  res.send('Server is running from Student Toolkit')
+})
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
